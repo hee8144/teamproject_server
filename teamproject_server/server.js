@@ -267,6 +267,13 @@ io.on("connection", (socket) => {
                 if ((user.level || 1) < 4) user.level = (user.level || 1) + 1;
             }
 
+            if (user.position === 7) {
+                user.islandCount = 3; // 3턴 동안 갇힘
+                console.log(`🏝️ Player ${playerIndex} 무인도 입성 (3턴)`);
+            }
+
+
+
             io.to(roomId).emit("update_state", room.state);
 
             // DB 실시간 반영
@@ -327,47 +334,158 @@ io.on("connection", (socket) => {
         if (!room) return;
 
         try {
-            // 보드 업데이트
-            if (stateUpdate.board) {
-                for (let bKey in stateUpdate.board) {
-                    room.state.board[bKey] = { ...room.state.board[bKey], ...stateUpdate.board[bKey] };
-                }
-            }
-
-            // 유저 자산 업데이트 및 totalMoney 자동 보정
-            if (stateUpdate.users) {
-                for (let uKey in stateUpdate.users) {
-                    if (room.state.users[uKey]) {
-                        // money만 전달된 경우 totalMoney도 동일한 차액만큼 반영
-                        if (stateUpdate.users[uKey].money !== undefined && stateUpdate.users[uKey].totalMoney === undefined) {
-                            const diff = stateUpdate.users[uKey].money - room.state.users[uKey].money;
-                            room.state.users[uKey].totalMoney = (room.state.users[uKey].totalMoney || 0) + diff;
-                            stateUpdate.users[uKey].totalMoney = room.state.users[uKey].totalMoney;
-                        }
-                        room.state.users[uKey] = { ...room.state.users[uKey], ...stateUpdate.users[uKey] };
-                    }
-                }
-            }
-
-            // Firestore 일괄 업데이트
             const roomRef = db.collection("online").doc(roomId);
+
+            // 1. 보드 업데이트 (메모리 + Firestore)
             if (stateUpdate.board) {
                 let bUpdates = {};
-                for (let key in stateUpdate.board) {
-                    if (stateUpdate.board[key].level !== undefined) bUpdates[`board.${key}.level`] = stateUpdate.board[key].level;
-                    if (stateUpdate.board[key].owner !== undefined) bUpdates[`board.${key}.owner`] = stateUpdate.board[key].owner;
+                for (let bKey in stateUpdate.board) {
+                    // 메모리 갱신
+                    room.state.board[bKey] = { ...room.state.board[bKey], ...stateUpdate.board[bKey] };
+
+                    // Firestore 업데이트 객체 생성
+                    if (stateUpdate.board[bKey].level !== undefined) bUpdates[`board.${bKey}.level`] = stateUpdate.board[bKey].level;
+                    if (stateUpdate.board[bKey].owner !== undefined) bUpdates[`board.${bKey}.owner`] = stateUpdate.board[bKey].owner;
                 }
                 if (Object.keys(bUpdates).length > 0) await roomRef.update(bUpdates);
             }
 
+            // 2. 유저 자산 업데이트 (핵심 수정 부분)
             if (stateUpdate.users) {
                 for (let uKey in stateUpdate.users) {
-                    await roomRef.collection("users").doc(uKey.replace("user", "user0")).update(stateUpdate.users[uKey]);
+                    if (room.state.users[uKey]) {
+                        const userDocId = uKey.replace("user", "user0");
+
+                        // 💡 중요: 인수는 다이얼로그에서 이미 Firebase를 수정했을 수 있음.
+                        // 따라서 Firestore의 현재 값을 먼저 읽어와서 메모리와 동기화합니다.
+                        const userSnap = await roomRef.collection("users").doc(userDocId).get();
+                        let currentDbData = userSnap.exists ? userSnap.data() : room.state.users[uKey];
+
+                        // 클라이언트가 보낸 새 데이터(money 등)가 있다면 적용
+                        let updatedUserData = { ...currentDbData, ...stateUpdate.users[uKey] };
+
+                        // totalMoney 자동 보정 (클라이언트가 money만 보냈을 경우)
+                        if (stateUpdate.users[uKey].money !== undefined && stateUpdate.users[uKey].totalMoney === undefined) {
+                            const diff = stateUpdate.users[uKey].money - currentDbData.money;
+                            updatedUserData.totalMoney = (currentDbData.totalMoney || 0) + diff;
+                        }
+
+                        // 메모리 갱신
+                        room.state.users[uKey] = updatedUserData;
+
+                        // Firestore 최종 업데이트 (동기화)
+                        await roomRef.collection("users").doc(userDocId).update(updatedUserData);
+                    }
                 }
             }
 
+            console.log(`✅ [액션 완료] 방: ${roomId}, 다음 턴으로 교체`);
             nextTurn(roomId);
-        } catch (e) { console.error("❌ 액션 완료 처리 오류:", e); }
+
+        } catch (e) {
+            console.error("❌ 액션 완료 처리 오류:", e);
+        }
+    });
+
+// ✅ 5. 자산 매각 처리 (파산 위기 탈출용)
+    socket.on("sell_assets", async ({ roomId, playerIndex, sellKeys, totalEarned }) => {
+        const room = rooms[roomId];
+        if (!room) return;
+
+        try {
+            const roomRef = db.collection("online").doc(roomId);
+            const userKey = `user${playerIndex}`;
+            const userDocId = `user0${playerIndex}`;
+
+            // 1. 보드 데이터 업데이트 (소유주 초기화)
+            let bUpdates = {};
+            sellKeys.forEach(key => {
+                // 메모리 반영
+                if (room.state.board[key]) {
+                    room.state.board[key].owner = "N";
+                    room.state.board[key].level = 0;
+                    room.state.board[key].isFestival = false;
+                }
+                // DB 반영용 객체 생성
+                bUpdates[`board.${key}.owner`] = "N";
+                bUpdates[`board.${key}.level`] = 0;
+                bUpdates[`board.${key}.isFestival`] = false;
+            });
+
+            if (Object.keys(bUpdates).length > 0) await roomRef.update(bUpdates);
+
+            // 2. 유저 돈 증가 (매각 대금 합산)
+            const user = room.state.users[userKey];
+            user.money += totalEarned;
+            // 자산을 판 것이므로 totalMoney(총자산)는 변하지 않거나,
+            // 매각가 차액에 따라 보정될 수 있으나 여기선 money만 합산 처리
+
+            await roomRef.collection("users").doc(userDocId).update({
+                money: user.money
+            });
+
+            console.log(`💰 [자산 매각] Player ${playerIndex}: ${sellKeys.length}개 지역 매각 완료`);
+
+            // 상태 전송 (클라이언트 다이얼로그에서 '위기 탈출' 팝업을 띄울 수 있게 함)
+            io.to(roomId).emit("update_state", room.state);
+
+        } catch (e) {
+            console.error("❌ 자산 매각 오류:", e);
+        }
+    });
+
+    // ✅ 6. 파산 확정 처리
+    socket.on("player_bankrupt", async ({ roomId, playerIndex }) => {
+        const room = rooms[roomId];
+        if (!room) return;
+
+        try {
+            const roomRef = db.collection("online").doc(roomId);
+            const userKey = `user${playerIndex}`;
+            const userDocId = `user0${playerIndex}`;
+
+            // 1. 유저 상태 'D' (Dead/Bankrupt)로 변경
+            if (room.state.users[userKey]) {
+                room.state.users[userKey].type = "D";
+                room.state.users[userKey].money = 0;
+                room.state.users[userKey].totalMoney = 0;
+            }
+            await roomRef.collection("users").doc(userDocId).update({
+                type: "D",
+                money: 0
+            });
+
+            // 2. 해당 유저가 소유했던 모든 땅 초기화
+            let bUpdates = {};
+            for (let key in room.state.board) {
+                if (room.state.board[key].owner?.toString() === playerIndex.toString()) {
+                    // 메모리 반영
+                    room.state.board[key].owner = "N";
+                    room.state.board[key].level = 0;
+                    room.state.board[key].multiply = 1;
+                    room.state.board[key].isFestival = false;
+
+                    // DB 반영
+                    bUpdates[`board.${key}.owner`] = "N";
+                    bUpdates[`board.${key}.level`] = 0;
+                    bUpdates[`board.${key}.multiply`] = 1;
+                    bUpdates[`board.${key}.isFestival`] = false;
+                }
+            }
+
+            if (Object.keys(bUpdates).length > 0) await roomRef.update(bUpdates);
+
+            console.log(`💀 [파산] Player ${playerIndex} 퇴장`);
+
+            // 모든 유저에게 업데이트 전파
+            io.to(roomId).emit("update_state", room.state);
+
+            // 턴을 다음 사람으로 강제 전환
+            nextTurn(roomId);
+
+        } catch (e) {
+            console.error("❌ 파산 처리 오류:", e);
+        }
     });
 
     socket.on("disconnect", () => {
