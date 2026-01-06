@@ -175,6 +175,7 @@ io.on("connection", (socket) => {
             position: 0,
             islandCount: 0,
             level: 1,
+            card: "N",
           }),
           usersCol.doc("user2").set({
             type: "N",
@@ -184,6 +185,7 @@ io.on("connection", (socket) => {
             position: 0,
             islandCount: 0,
             level: 1,
+            card: "N",
           }),
           usersCol.doc("user3").set({
             type: "N",
@@ -193,6 +195,7 @@ io.on("connection", (socket) => {
             position: 0,
             islandCount: 0,
             level: 1,
+            card: "N",
           }),
           usersCol.doc("user4").set({
             type: "N",
@@ -202,6 +205,7 @@ io.on("connection", (socket) => {
             position: 0,
             islandCount: 0,
             level: 1,
+            card: "N",
           }),
         ]);
 
@@ -263,6 +267,10 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("get_rooms", () => {
+    socket.emit("room_list", Object.keys(rooms));
+  });
+
   socket.on("join_room", (roomId) => {
     roomId = String(roomId);
     if (rooms[roomId]) {
@@ -310,7 +318,6 @@ io.on("connection", (socket) => {
       while (assigned.includes(idx)) idx++;
       player = { id: socket.id, index: idx };
       room.players.push(player);
-
       const userKey = `user${idx}`;
       if (room.state.users[userKey]) {
         room.state.users[userKey].type = "P";
@@ -365,7 +372,7 @@ io.on("connection", (socket) => {
       }
 
       const oldPos = user.position || 0;
-      //            user.position = (oldPos + d1 + d2) % 28;
+      //   user.position = (oldPos + d1 + d2) % 28;
       user.position = 3;
       // 🏝️ 무인도 도착 시 처리
       if (user.position === 7) {
@@ -502,6 +509,7 @@ io.on("connection", (socket) => {
             const userDocId = uKey;
             const userSnap = await roomRef.collection("users").doc(userDocId).get();
             let currentDbData = userSnap.exists ? userSnap.data() : room.state.users[uKey];
+            stateUpdate.users[uKey].card;
             let updatedUserData = { ...currentDbData, ...stateUpdate.users[uKey] };
 
             if (stateUpdate.users[uKey].money !== undefined && stateUpdate.users[uKey].totalMoney === undefined) {
