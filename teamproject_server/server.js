@@ -372,8 +372,8 @@ io.on("connection", (socket) => {
       }
 
       const oldPos = user.position || 0;
-      //   user.position = (oldPos + d1 + d2) % 28;
-      user.position = 3;
+      user.position = (oldPos + d1 + d2) % 28;
+//      user.position = oldPos + 7;
       // 🏝️ 무인도 도착 시 처리
       if (user.position === 7) {
         user.islandCount = 3;
@@ -425,7 +425,11 @@ io.on("connection", (socket) => {
               isDouble,
             });
             return;
-          } else {
+          }
+          else if(isMyProperty && user.level <= tile.level){
+            return;
+          }
+          else {
             let levelMulti = [0, 2, 6, 14, 30][tile.level || 0];
             let toll = tile.tollPrice * (tile.multiply || 1) * levelMulti;
             io.to(roomId).emit("request_action", {
@@ -441,14 +445,47 @@ io.on("connection", (socket) => {
         }
 
         if (tile.type === "tax") {
-          io.to(roomId).emit("request_action", {
-            type: "tax_event",
-            pos: user.position,
-            playerIndex: player.index,
-            tax: 500000,
-            isDouble,
-          });
-          return;
+            const userKey = `user${player.index}`;
+            const roomState = room.state;
+
+            let totalBuildingValue = 0;
+
+            // 💡 레벨별 건설 비용 가중치 정의 (0레벨: 0, 1레벨: 1, 2레벨: 3, 3레벨: 7, 4레벨: 15)
+            const levelMultipliers = [0, 1, 3, 7, 15];
+
+            // 보드판 전체를 순회하며 해당 유저의 건물 가치 합산
+            for (let key in roomState.board) {
+                const boardTile = roomState.board[key];
+
+                // 1. 내 땅인지 확인
+                if (boardTile.owner?.toString() === player.index.toString()) {
+                    const currentLevel = boardTile.level || 0;
+                    const basePrice = boardTile.tollPrice || 0; // 건물마다 다른 기본 건설 비용
+
+                    // 2. 가중치 적용: (기본 비용 * 레벨별 배수)
+                    // 예: 2레벨 건물이면 기본비용의 3배를 가치로 산정
+                    if (currentLevel > 0) {
+                        totalBuildingValue += (basePrice * levelMultipliers[currentLevel]);
+                    }
+                }
+            }
+
+            // 3. 최종 세금 산출 (총 가치의 10%)
+            const calculatedTax = Math.floor(totalBuildingValue * 0.1);
+
+            console.log(`💰 [국세청] Player ${player.index} 세금 계산`);
+            console.log(`- 총 건물 가치: ${totalBuildingValue}원`);
+            console.log(`- 부과 세금(10%): ${calculatedTax}원`);
+
+            // 4. 클라이언트에 세금 액수 전달
+            io.to(roomId).emit("request_action", {
+                type: "tax_event",
+                pos: roomState.users[userKey].position,
+                playerIndex: player.index,
+                tax: calculatedTax,
+                isDouble: isDouble,
+            });
+            return;
         }
         if (tile.type === "chance") {
           console.log(`🎲 찬스 타일 감지: Player ${player.index}`);
