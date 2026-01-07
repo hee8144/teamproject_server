@@ -347,56 +347,199 @@ io.on("connection", (socket) => {
 
     const d1 = Math.floor(Math.random() * 6) + 1;
     const d2 = Math.floor(Math.random() * 6) + 1;
+    const steps = d1 + d2;
     const isDouble = d1 === d2;
 
     io.to(roomId).emit("dice_animation", { playerIndex: player.index, d1, d2, isDouble });
 
+    // setTimeout(async () => {
+    //   const user = room.state.users[`user${player.index}`];
+    //   if (!user) return;
+
+    //   // 🏝️ 무인도 탈출 체크 로직
+    //   if (user.islandCount > 0) {
+    //     if (isDouble) {
+    //       user.islandCount = 0; // 더블이면 즉시 탈출 후 주사위만큼 이동 진행
+    //       console.log(`🎲 Player ${player.index} 더블로 무인도 탈출!`);
+    //     } else {
+    //       user.islandCount -= 1; // 카운트만 감소
+    //       console.log(`🏝️ Player ${player.index} 무인도 대기 중... 남은 턴: ${user.islandCount}`);
+
+    //       await db.collection("online").doc(roomId).collection("users").doc(`user${player.index}`).update({
+    //         islandCount: user.islandCount,
+    //       });
+    //       return nextTurn(roomId);
+    //     }
+    //   }
+
+    // const oldPos = user.position || 0;
+    // user.position = (oldPos + d1 + d2) % 28;
+    //   // user.position = 3;
+    //   // 🏝️ 무인도 도착 시 처리
+    //   if (user.position === 7) {
+    //     user.islandCount = 3;
+    //     // DB 업데이트만 하고 턴을 종료합니다. (팝업 요청 삭제)
+    //     await db.collection("online").doc(roomId).collection("users").doc(`user${player.index}`).update({
+    //       position: user.position,
+    //       islandCount: user.islandCount,
+    //     });
+
+    //     io.to(roomId).emit("update_state", room.state);
+
+    //     // 도착한 즉시 팝업을 띄우지 않고 턴을 넘깁니다.
+    //     return nextTurn(roomId);
+    //   }
+
+    //   if (oldPos + d1 + d2 >= 28) {
+    //     user.money += 1000000;
+    //     user.totalMoney = (user.totalMoney || 0) + 1000000;
+    //     if ((user.level || 1) < 4) user.level = (user.level || 1) + 1;
+    //   }
+
+    //   io.to(roomId).emit("update_state", room.state);
+
+    //   db.collection("online")
+    //     .doc(roomId)
+    //     .collection("users")
+    //     .doc(`user${player.index}`)
+    //     .update({
+    //       position: user.position,
+    //       money: user.money,
+    //       totalMoney: user.totalMoney,
+    //       level: user.level,
+    //       islandCount: user.islandCount,
+    //     })
+    //     .catch((e) => console.error("DB 업데이트 오류:", e));
+
+    //   const tile = room.state.board[`b${user.position}`] || { type: "none" };
+
+    //   setTimeout(() => {
+    //     if (tile.type === "land") {
+    //       const noOwner = !tile.owner || tile.owner === "N" || tile.owner === "0" || tile.owner === 0;
+    //       const isMyProperty = !noOwner && tile.owner.toString() === player.index.toString();
+
+    //       if (noOwner || isMyProperty) {
+    //         io.to(roomId).emit("request_action", {
+    //           type: "land_event",
+    //           pos: user.position,
+    //           playerIndex: player.index,
+    //           isDouble,
+    //         });
+    //         return;
+    //       } else {
+    //         let levelMulti = [0, 2, 6, 14, 30][tile.level || 0];
+    //         let toll = tile.tollPrice * (tile.multiply || 1) * levelMulti;
+    //         io.to(roomId).emit("request_action", {
+    //           type: "toll_event",
+    //           pos: user.position,
+    //           playerIndex: player.index,
+    //           toll,
+    //           ownerIndex: tile.owner,
+    //           isDouble,
+    //         });
+    //         return;
+    //       }
+    //     }
+
+    //     if (tile.type === "tax") {
+    //       io.to(roomId).emit("request_action", {
+    //         type: "tax_event",
+    //         pos: user.position,
+    //         playerIndex: player.index,
+    //         tax: 500000,
+    //         isDouble,
+    //       });
+    //       return;
+    //     }
+    //     if (tile.type === "chance") {
+    //       console.log(`🎲 찬스 타일 감지: Player ${player.index}`);
+    //       io.to(roomId).emit("request_action", {
+    //         type: "chance", // 클라이언트의 _handleServerRequest에서 기다리는 문자열
+    //         pos: user.position,
+    //         playerIndex: player.index,
+    //         isDouble: isDouble,
+    //       });
+    //       return; // 클라이언트의 응답(action_complete)을 기다려야 하므로 여기서 멈춤
+    //     }
+
+    //     if (isDouble) {
+    //       console.log(`🎲 더블 발생! Player ${player.index} 한 번 더 던지세요.`);
+    //       io.to(roomId).emit("update_state", room.state);
+    //     } else {
+    //       nextTurn(roomId);
+    //     }
+    //   }, 800);
+    // }, 2200);
     setTimeout(async () => {
       const user = room.state.users[`user${player.index}`];
       if (!user) return;
 
-      // 🏝️ 무인도 탈출 체크 로직
+      const oldPos = user.position || 0;
+      user.position = (oldPos + d1 + d2) % 28;
+
+      // 🏝️ [활성화] 무인도 탈출 체크 로직
       if (user.islandCount > 0) {
         if (isDouble) {
-          user.islandCount = 0; // 더블이면 즉시 탈출 후 주사위만큼 이동 진행
+          user.islandCount = 0;
           console.log(`🎲 Player ${player.index} 더블로 무인도 탈출!`);
+          // 더블 탈출 시에는 이동을 진행합니다.
         } else {
-          user.islandCount -= 1; // 카운트만 감소
+          user.islandCount -= 1;
           console.log(`🏝️ Player ${player.index} 무인도 대기 중... 남은 턴: ${user.islandCount}`);
 
-          await db.collection("online").doc(roomId).collection("users").doc(`user${player.index}`).update({
-            islandCount: user.islandCount,
-          });
-          return nextTurn(roomId);
+          await updateDBUser(roomId, player.index, user);
+          io.to(roomId).emit("update_state", room.state);
+          return nextTurn(roomId); // 이동 없이 턴 종료
         }
       }
 
-      const oldPos = user.position || 0;
-      user.position = (oldPos + d1 + d2) % 28;
-//      user.position = oldPos + 7;
-      // 🏝️ 무인도 도착 시 처리
-      if (user.position === 7) {
-        user.islandCount = 3;
-        // DB 업데이트만 하고 턴을 종료합니다. (팝업 요청 삭제)
-        await db.collection("online").doc(roomId).collection("users").doc(`user${player.index}`).update({
-          position: user.position,
-          islandCount: user.islandCount,
-        });
+      // 2. 무인도가 아니거나 탈출 성공 시, 말 이동 애니메이션 지시
+      io.to(roomId).emit("move_player", {
+        playerIndex: player.index,
+        steps: steps,
+        isDouble: isDouble, // 더블 여부 전달
+      });
+    }, 2200); // 주사위 굴러가는 시간 대기
+  });
 
-        io.to(roomId).emit("update_state", room.state);
+  socket.on("move_complete", async ({ roomId, playerIndex, finalPos }) => {
+    const room = rooms[roomId];
+    if (!room) return;
 
-        // 도착한 즉시 팝업을 띄우지 않고 턴을 넘깁니다.
-        return nextTurn(roomId);
+    const user = room.state.users[`user${playerIndex}`];
+    const oldPos = user.position || 0;
+    user.position = finalPos; // 클라이언트가 보고한 위치로 확정
+
+    const passedStart = finalPos < oldPos;
+
+    if (passedStart) {
+      console.log(`💰 Player ${playerIndex} 시작점 통과! 레벨업 시도.`);
+      user.money += 1000000;
+      user.totalMoney += 1000000;
+
+      // 레벨 초기값이 없을 경우를 대비해 1로 시작
+      if (!user.level) user.level = 1;
+
+      if (user.level < 4) {
+        user.level += 1;
+        console.log(`⬆️ 레벨 상승: ${user.level - 1} -> ${user.level}`);
       }
+    }
 
-      if (oldPos + d1 + d2 >= 28) {
-        user.money += 1000000;
-        user.totalMoney = (user.totalMoney || 0) + 1000000;
-        if ((user.level || 1) < 4) user.level = (user.level || 1) + 1;
-      }
-
+    // 🏝️ 무인도 도착 시 처리
+    if (user.position === 7) {
+      user.islandCount = 3;
+      await updateDBUser(roomId, playerIndex, user);
       io.to(roomId).emit("update_state", room.state);
+      return nextTurn(roomId);
+    }
 
+    // DB 업데이트
+    await updateDBUser(roomId, playerIndex, user);
+    io.to(roomId).emit("update_state", room.state);
+
+    // 🚩 도착한 타일의 이벤트 판정
+    const tile = room.state.board[`b${user.position}`] || { type: "none" };
       db.collection("online")
         .doc(roomId)
         .collection("users")
@@ -498,15 +641,79 @@ io.on("connection", (socket) => {
           return; // 클라이언트의 응답(action_complete)을 기다려야 하므로 여기서 멈춤
         }
 
-        if (isDouble) {
-          console.log(`🎲 더블 발생! Player ${player.index} 한 번 더 던지세요.`);
-          io.to(roomId).emit("update_state", room.state);
-        } else {
-          nextTurn(roomId);
-        }
-      }, 800);
-    }, 2200);
+    if (tile.type === "start") {
+      // 💡 출발지에 딱 멈췄을 때 팝업을 띄우기 위한 요청
+      io.to(roomId).emit("request_action", {
+        type: "start_event",
+        playerIndex,
+      });
+    } else if (tile.type === "festival") {
+      // 💡 축제 칸에 멈췄을 때
+      io.to(roomId).emit("request_action", {
+        type: "festival_event",
+        pos: user.position,
+        playerIndex,
+      });
+    }
+
+    // (이 아래는 기존 roll_dice에 있던 land, toll, tax, chance 판정 로직을 그대로 사용합니다)
+    if (tile.type === "land") {
+      const noOwner = !tile.owner || tile.owner === "N" || tile.owner === "0";
+      const isMyProperty = !noOwner && String(tile.owner) === String(playerIndex);
+
+      if (noOwner || isMyProperty) {
+        io.to(roomId).emit("request_action", { type: "land_event", pos: user.position, playerIndex });
+      } else {
+        let levelMulti = [0, 2, 6, 14, 30][tile.level || 0];
+        let toll = tile.tollPrice * (tile.multiply || 1) * levelMulti;
+        io.to(roomId).emit("request_action", {
+          type: "toll_event",
+          pos: user.position,
+          playerIndex,
+          toll,
+          ownerIndex: tile.owner,
+        });
+      }
+    } else if (tile.type === "tax") {
+      io.to(roomId).emit("request_action", { type: "tax_event", pos: user.position, playerIndex, tax: 500000 });
+    } else if (tile.type === "chance") {
+      io.to(roomId).emit("request_action", { type: "chance", pos: user.position, playerIndex });
+    } else if (tile.type === "festival") {
+      // 💡 축제 타일 도착 시 클라이언트에 축제 열 땅을 고르라고 요청
+      io.to(roomId).emit("request_action", {
+        type: "festival_event",
+        pos: user.position,
+        playerIndex,
+      });
+    } else if (tile.type === "travel") {
+      // 💡 국내여행(21번) 분기 추가
+      io.to(roomId).emit("request_action", {
+        type: "travel_event", // 클라이언트에 보낼 타입
+        pos: user.position,
+        playerIndex,
+      });
+    } else {
+      // 아무 이벤트 없는 칸
+      nextTurn(roomId);
+    }
   });
+
+  // 중복 코드를 줄이기 위한 유틸 함수
+  async function updateDBUser(roomId, idx, userData) {
+    await db
+      .collection("online")
+      .doc(roomId)
+      .collection("users")
+      .doc(`user${idx}`)
+      .update({
+        position: userData.position,
+        money: userData.money,
+        totalMoney: userData.totalMoney,
+        level: userData.level,
+        islandCount: userData.islandCount,
+      })
+      .catch((e) => console.error("DB Update Error:", e));
+  }
 
   // ✅ [추가] 무인도 주사위 던지기 대기 완료 이벤트
   socket.on("island_wait_complete", ({ roomId, playerIndex }) => {
