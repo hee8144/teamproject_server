@@ -116,7 +116,49 @@ async function updateDBUser(roomId, idx, userData) {
     .catch((e) => console.error("DB Update Error:", e));
 }
 
-// --- 턴 관리 로직 ---
+// 승리 조건 체크 함수 (독점 승리)
+function checkWinCondition(board, playerIndex) {
+  const playerStr = String(playerIndex);
+
+  // A. 트리플 독점 (Triple Monopoly)
+  let ownedGroups = 0;
+  for (let g = 1; g <= 8; g++) {
+    let groupTiles = [];
+    for (let key in board) {
+      if (board[key].type === 'land' && board[key].group === g) {
+        groupTiles.push(board[key]);
+      }
+    }
+    if (groupTiles.length > 0) {
+      const allMine = groupTiles.every(t => String(t.owner) === playerStr);
+      if (allMine) ownedGroups++;
+    }
+  }
+  if (ownedGroups >= 3) return "triple_monopoly";
+
+  // B. 라인 독점 (Line Monopoly)
+  const lines = [
+    { start: 0, end: 7 }, { start: 7, end: 14 }, { start: 14, end: 21 }, { start: 21, end: 28 }
+  ];
+  for (let line of lines) {
+    let hasLand = false;
+    let lineMonopoly = true;
+    for (let i = line.start; i < line.end; i++) {
+      const tile = board[`b${i}`];
+      if (tile && tile.type === 'land') {
+        hasLand = true;
+        if (String(tile.owner) !== playerStr) {
+          lineMonopoly = false;
+          break;
+        }
+      }
+    }
+    if (hasLand && lineMonopoly) return "line_monopoly";
+  }
+  return null;
+}
+
+// --- 턴 관리 로직 (턴 종료 승리 추가됨) ---
 
 function nextTurn(roomId) {
   const room = rooms[roomId];
@@ -129,17 +171,58 @@ function nextTurn(roomId) {
   let nextIndexInList = (currentIndexInList + 1) % activeIndexes.length;
   let nextPlayerIndex = activeIndexes[nextIndexInList];
 
-  // 한 바퀴 돌면 전체 턴 감소
-  if (nextIndexInList === 0 && room.state.totalTurn > 0) {
-    room.state.totalTurn -= 1;
-    console.log(`📉 턴 종료! 남은 턴: ${room.state.totalTurn}`);
+  // 한 바퀴 돌았을 때 턴 감소
+  if (nextIndexInList === 0) {
+    if (room.state.totalTurn > 0) {
+      room.state.totalTurn -= 1;
+      console.log(`📉 턴 종료! 남은 턴: ${room.state.totalTurn}`);
+    }
+
+    // 🏆 [추가됨] 턴이 0이 되면 게임 종료 (자산 1등 승리)
+    if (room.state.totalTurn <= 0) {
+        let maxMoney = -999999999;
+        let winnerIdx = 0;
+
+        // 생존자 중 자산(Total Money)이 가장 많은 사람 찾기
+        for (let i = 1; i <= 4; i++) {
+            const u = room.state.users[`user${i}`];
+            if (u && u.type !== 'D' && u.type !== 'N') {
+                if (u.totalMoney > maxMoney) {
+                    maxMoney = u.totalMoney;
+                    winnerIdx = i;
+                }
+            }
+        }
+
+        console.log(`🏁 턴 종료! 승자: Player ${winnerIdx} (자산: ${maxMoney})`);
+        io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
+        return; // 게임 종료
+    }
   }
 
-  // 파산 플레이어 건너뛰기
+  let nextPlayerIndex = activeIndexes[nextIndexInList];
+
+  // 파산한 플레이어 건너뛰기
   let safety = 0;
   while (room.state.users[`user${nextPlayerIndex}`]?.type === "D" && safety < activeIndexes.length) {
     nextIndexInList = (nextIndexInList + 1) % activeIndexes.length;
-    if (nextIndexInList === 0 && room.state.totalTurn > 0) room.state.totalTurn -= 1;
+    // 건너뛰는 과정에서 0번 인덱스를 지나가면 턴 감소 로직 적용
+    if (nextIndexInList === 0 && room.state.totalTurn > 0) {
+       room.state.totalTurn -= 1;
+       // 여기서도 턴 0 체크
+       if (room.state.totalTurn <= 0) {
+            let maxMoney = -999999999;
+            let winnerIdx = 0;
+            for (let i = 1; i <= 4; i++) {
+                const u = room.state.users[`user${i}`];
+                if (u && u.type !== 'D' && u.type !== 'N') {
+                    if (u.totalMoney > maxMoney) { maxMoney = u.totalMoney; winnerIdx = i; }
+                }
+            }
+            io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
+            return;
+       }
+    }
     nextPlayerIndex = activeIndexes[nextIndexInList];
     safety++;
   }
@@ -187,7 +270,6 @@ function nextTurn(roomId) {
 io.on("connection", (socket) => {
   console.log(`🔌 연결됨: ${socket.id}`);
 
-  // 1. 방 생성 (이부분에서 돈 초기화 문제 해결!)
   socket.on("create_room", async (data) => {
     const roomId = typeof data === "object" ? String(data.roomId) : String(data);
     const localData = typeof data === "object" ? data : null;
@@ -206,7 +288,6 @@ io.on("connection", (socket) => {
           board: initialBoard,
         });
 
-        // DB 초기화
         const usersCol = roomRef.collection("users");
         await Promise.all([
           usersCol.doc("user1").set({
@@ -249,7 +330,6 @@ io.on("connection", (socket) => {
           }),
         ]);
 
-        // ✅ [수정 완료] 메모리 초기화 시에도 user2,3,4에 돈을 넣어줌!
         rooms[roomId] = {
           state: {
             users: {
@@ -337,7 +417,7 @@ io.on("connection", (socket) => {
           rooms[roomId] = {
             state: {
               ...roomData,
-              users: dbUsers || {}, // DB에서 불러오므로 여기엔 돈 정보가 다 있음
+              users: dbUsers || {},
               board: dbBoard,
             },
             players: rooms[roomId]?.players || [],
@@ -369,12 +449,10 @@ io.on("connection", (socket) => {
       player = { id: socket.id, index: idx };
       room.players.push(player);
 
-      // 입장 시 메모리 업데이트
       if (room.state.users[`user${idx}`]) {
         room.state.users[`user${idx}`].type = "P";
         room.state.users[`user${idx}`].name = `Player ${idx}`;
         room.state.users[`user${idx}`].id = socket.id;
-        // 돈이 이미 메모리에 있으므로 굳이 다시 안 넣어도 되지만 안전장치
         if (!room.state.users[`user${idx}`].money) {
           room.state.users[`user${idx}`].money = DEFAULT_MONEY;
           room.state.users[`user${idx}`].totalMoney = DEFAULT_MONEY;
@@ -655,6 +733,7 @@ io.on("connection", (socket) => {
       const roomRef = db.collection("online").doc(roomId);
       let isIslandEscape = false;
 
+      // 1. 보드 업데이트
       if (stateUpdate.board) {
         let bUpdates = {};
         for (let bKey in stateUpdate.board) {
@@ -667,6 +746,7 @@ io.on("connection", (socket) => {
         if (Object.keys(bUpdates).length > 0) await roomRef.update(bUpdates);
       }
 
+      // 2. 유저 업데이트
       if (stateUpdate.users) {
         for (let uKey in stateUpdate.users) {
           if (room.state.users[uKey]) {
@@ -689,11 +769,17 @@ io.on("connection", (socket) => {
         }
       }
 
-      console.log(`✅ [액션 완료] 방: ${roomId}, 더블: ${isDouble}, 탈출: ${isIslandEscape}`);
+      // 3. 승리 조건 체크 (독점 승리)
+      const currentPlayerIndex = room.state.currentTurn;
+      const winType = checkWinCondition(room.state.board, currentPlayerIndex);
 
-      if (isIslandEscape) {
-        io.to(roomId).emit("update_state", room.state);
-      } else if (isDouble) {
+      if (winType) {
+        console.log(`🏆 승리 발생! Player ${currentPlayerIndex} - ${winType}`);
+        io.to(roomId).emit("game_over", { winner: currentPlayerIndex, type: winType });
+        return;
+      }
+
+      if (isIslandEscape || isDouble) {
         io.to(roomId).emit("update_state", room.state);
       } else {
         nextTurn(roomId);
@@ -711,10 +797,13 @@ io.on("connection", (socket) => {
     }
   });
 
+  // 🏆 [추가됨] 파산 시 승리 조건 체크
   socket.on("player_bankrupt", async ({ roomId, playerIndex }) => {
     const room = rooms[roomId];
     if (!room) return;
     const roomRef = db.collection("online").doc(roomId);
+
+    // 파산 처리
     await roomRef.collection("users").doc(`user${playerIndex}`).update({ type: "D", money: 0 });
     room.state.users[`user${playerIndex}`].type = "D";
 
@@ -732,7 +821,24 @@ io.on("connection", (socket) => {
       }
     }
     if (Object.keys(bUpdates).length > 0) await roomRef.update(bUpdates);
-    console.log(`💀 [파산] Player ${playerIndex} 퇴장`);
+
+    // 🏆 생존자 확인 (파산 승리)
+    let survivors = [];
+    Object.keys(room.state.users).forEach(key => {
+        const u = room.state.users[key];
+        if (u.type !== 'D' && u.type !== 'N') {
+            survivors.push(parseInt(key.replace('user', '')));
+        }
+    });
+
+    // 생존자가 1명이면 그 사람이 승리
+    if (survivors.length === 1) {
+        const winnerIdx = survivors[0];
+        console.log(`🏆 파산 승리! Player ${winnerIdx}`);
+        io.to(roomId).emit("game_over", { winner: winnerIdx, type: "bankruptcy" });
+        return; // 게임 종료 (턴 안 넘김)
+    }
+
     io.to(roomId).emit("update_state", room.state);
     nextTurn(roomId);
   });
