@@ -35,6 +35,7 @@ function generateInitialBoard() {
     let type = "land";
     let name = null;
 
+    // 1. 타입 결정
     if (i === 0) {
       type = "start";
       name = "출발지";
@@ -55,10 +56,23 @@ function generateInitialBoard() {
       name = "찬스";
     }
 
-    const blockData = { index: i, type: type, name: name };
+    // 2. 기본 데이터 구조 (여기서 owner: "N"을 강제함)
+    const blockData = {
+      index: i,
+      type: type,
+      name: name,
+      owner: "N", // 반드시 "N"
+      level: 0,
+      isFestival: false,
+      multiply: 1,
+      tollPrice: 0,
+      group: 0,
+    };
 
+    // 3. 땅일 경우 세부 설정 (fullName 등 외부 데이터 오염 차단)
     if (type === "land") {
-      const calculatedToll = 100000 + landCount * 10000;
+      blockData.tollPrice = 100000 + landCount * 10000;
+
       let group = 0;
       if (i === 1 || i === 2) group = 1;
       else if (i >= 4 && i <= 6) group = 2;
@@ -69,17 +83,10 @@ function generateInitialBoard() {
       else if (i === 22 || i === 23) group = 7;
       else if (i === 25 || i === 27) group = 8;
 
-      Object.assign(blockData, {
-        name: null,
-        level: 0,
-        owner: "N",
-        tollPrice: calculatedToll,
-        isFestival: false,
-        multiply: 1,
-        group: group,
-      });
+      blockData.group = group;
       landCount++;
     }
+
     board[key] = blockData;
   }
   return board;
@@ -125,12 +132,12 @@ function checkWinCondition(board, playerIndex) {
   for (let g = 1; g <= 8; g++) {
     let groupTiles = [];
     for (let key in board) {
-      if (board[key].type === 'land' && board[key].group === g) {
+      if (board[key].type === "land" && board[key].group === g) {
         groupTiles.push(board[key]);
       }
     }
     if (groupTiles.length > 0) {
-      const allMine = groupTiles.every(t => String(t.owner) === playerStr);
+      const allMine = groupTiles.every((t) => String(t.owner) === playerStr);
       if (allMine) ownedGroups++;
     }
   }
@@ -138,14 +145,17 @@ function checkWinCondition(board, playerIndex) {
 
   // B. 라인 독점 (Line Monopoly)
   const lines = [
-    { start: 0, end: 7 }, { start: 7, end: 14 }, { start: 14, end: 21 }, { start: 21, end: 28 }
+    { start: 0, end: 7 },
+    { start: 7, end: 14 },
+    { start: 14, end: 21 },
+    { start: 21, end: 28 },
   ];
   for (let line of lines) {
     let hasLand = false;
     let lineMonopoly = true;
     for (let i = line.start; i < line.end; i++) {
       const tile = board[`b${i}`];
-      if (tile && tile.type === 'land') {
+      if (tile && tile.type === "land") {
         hasLand = true;
         if (String(tile.owner) !== playerStr) {
           lineMonopoly = false;
@@ -204,7 +214,31 @@ function nextTurn(roomId) {
 
   // 파산한 플레이어 건너뛰기
   let safety = 0;
-  while (room.state.users[`user${nextPlayerIndex}`]?.type === "D" && safety < activeIndexes.length) {
+  while (safety < activeIndexes.length) {
+    const targetUser = room.state.users[`user${nextPlayerIndex}`];
+
+    // Case A: 파산한 플레이어인가?
+    if (targetUser?.type === "D") {
+      console.log(`💀 Player ${nextPlayerIndex} 파산 - 건너뜁니다.`);
+    }
+    // Case B: 한 턴 쉬어야 하는 플레이어인가?
+    else if (targetUser?.restCount > 0) {
+      targetUser.restCount -= 1; // 횟수 차감
+      console.log(`😴 Player ${nextPlayerIndex} 휴식 중 - 건너뜁니다. (남은 휴식: ${targetUser.restCount})`);
+
+      // DB 업데이트 (비동기지만 기다리지 않고 진행해도 무방)
+      db.collection("online")
+        .doc(roomId)
+        .collection("users")
+        .doc(`user${nextPlayerIndex}`)
+        .update({ restCount: targetUser.restCount });
+    }
+    // Case C: 정상적인 플레이어인가? -> 이 사람 턴으로 확정!
+    else {
+      break;
+    }
+
+    // 다음 인덱스로 이동
     nextIndexInList = (nextIndexInList + 1) % activeIndexes.length;
     // 건너뛰는 과정에서 0번 인덱스를 지나가면 턴 감소 로직 적용
     if (nextIndexInList === 0 && room.state.totalTurn > 0) {
@@ -231,11 +265,9 @@ function nextTurn(roomId) {
   const nextPlayer = room.state.users[`user${nextPlayerIndex}`];
 
   console.log(`🎲 [턴 교체] Player ${nextPlayerIndex} 차례`);
-
-  // 1️⃣ 상태 먼저 클라이언트에 전달
   io.to(roomId).emit("update_state", room.state);
 
-  // 2️⃣ 무인도 처리
+  // 이후 무인도/여행/주사위 활성화 로직 (기존과 동일)
   if (nextPlayer?.islandCount > 0) {
     io.to(roomId).emit("request_action", {
       type: "island_event",
@@ -243,26 +275,41 @@ function nextTurn(roomId) {
       playerIndex: nextPlayerIndex,
       islandCount: nextPlayer.islandCount,
     });
-    return; // 주사위 굴림 금지
+    return;
   }
 
-  // 2️⃣ 여행 예약 처리 (이 부분이 핵심입니다)
   if (nextPlayer?.pendingTravel?.needSelect === true) {
-    console.log(`✈ [EVENT] Player ${nextPlayerIndex} 여행 선택 시작`);
-
-    // 여행 플래그 초기화 (한 번만 실행되도록)
     nextPlayer.pendingTravel.needSelect = false;
-
-    // 클라이언트에 "하이라이트 띄우고 목적지 골라라"라고 요청
-    io.to(roomId).emit("request_action", {
-      type: "travel_select",
-      playerIndex: nextPlayerIndex,
-    });
-    return; // 주사위 굴림 권한을 주지 않고 종료
+    io.to(roomId).emit("request_action", { type: "travel_select", playerIndex: nextPlayerIndex });
+    return;
   }
 
-  // 3️⃣ 일반 턴일 때만 주사위 활성화
   io.to(roomId).emit("enable_roll_dice", { playerIndex: nextPlayerIndex });
+}
+
+// 헬퍼 함수: 턴을 감소시키고 0이 되면 게임을 종료함
+function reduceTotalTurn(roomId) {
+  const room = rooms[roomId];
+  if (room.state.totalTurn > 0) {
+    room.state.totalTurn -= 1;
+  }
+
+  if (room.state.totalTurn <= 0) {
+    let maxMoney = -999999999;
+    let winnerIdx = 0;
+    for (let i = 1; i <= 4; i++) {
+      const u = room.state.users[`user${i}`];
+      if (u && u.type !== "D" && u.type !== "N") {
+        if (u.totalMoney > maxMoney) {
+          maxMoney = u.totalMoney;
+          winnerIdx = i;
+        }
+      }
+    }
+    io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
+    return false; // 게임 종료됨
+  }
+  return true; // 계속 진행
 }
 
 // --- 소켓 이벤트 핸들링 ---
@@ -280,13 +327,16 @@ io.on("connection", (socket) => {
         const roomRef = db.collection("online").doc(roomId);
         const initialBoard = generateInitialBoard();
 
-        await roomRef.set({
-          localName: localData?.localName || "알 수 없음",
-          localCode: localData?.localCode || "",
-          status: "waiting",
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          board: initialBoard,
-        });
+        await roomRef.set(
+          {
+            localName: localData?.localName || "알 수 없음",
+            localCode: localData?.localCode || "",
+            status: "waiting",
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            board: initialBoard,
+          },
+          { merge: false }
+        );
 
         const usersCol = roomRef.collection("users");
         await Promise.all([
@@ -389,15 +439,21 @@ io.on("connection", (socket) => {
 
   socket.on("join_room", (roomId) => {
     roomId = String(roomId);
+    // 서버 메모리에 방이 이미 있다면 즉시 성공
     if (rooms[roomId]) {
       socket.emit("join_success", roomId);
     } else {
+      // 서버 메모리에 없는데 DB에만 있는 경우,
+      // 오래된 방일 수 있으므로 체크 후 입장 허용
       db.collection("online")
         .doc(roomId)
         .get()
         .then((doc) => {
-          if (doc.exists) socket.emit("join_success", roomId);
-          else socket.emit("join_failed", "방을 찾을 수 없습니다.");
+          if (doc.exists) {
+            socket.emit("join_success", roomId);
+          } else {
+            socket.emit("join_failed", "방을 찾을 수 없습니다.");
+          }
         });
     }
   });
@@ -406,6 +462,7 @@ io.on("connection", (socket) => {
     roomId = String(roomId);
 
     if (!rooms[roomId]) {
+      // 1. 방이 서버 메모리에 없을 때만 DB에서 가져옴
       try {
         const roomRef = db.collection("online").doc(roomId);
         const roomSnap = await roomRef.get();
@@ -420,21 +477,16 @@ io.on("connection", (socket) => {
               users: dbUsers || {},
               board: dbBoard,
             },
-            players: rooms[roomId]?.players || [],
+            players: [],
           };
         }
       } catch (e) {
         console.error("❌ 데이터 로드 오류:", e);
       }
     } else {
-      try {
-        const roomRef = db.collection("online").doc(roomId);
-        const roomSnap = await roomRef.get();
-        if (roomSnap.exists) {
-          const dbData = roomSnap.data();
-          if (dbData.board) rooms[roomId].state.board = dbData.board;
-        }
-      } catch (e) {}
+      // 2. ⭐ 중요: 이미 rooms[roomId]가 존재한다면 DB에서 다시 읽지 않습니다.
+      // 기존의 db.collection("online").doc(roomId).get() 로직을 "삭제" 하세요.
+      console.log(`[Join] ${roomId} 방은 이미 메모리에 있어 DB 로드를 생략합니다.`);
     }
 
     const room = rooms[roomId];
@@ -482,7 +534,7 @@ io.on("connection", (socket) => {
 
     const d1 = Math.floor(Math.random() * 6) + 1;
     const d2 = Math.floor(Math.random() * 6) + 1;
-    const steps = 21;
+    const steps = 3;
     const isDouble = d1 === d2;
 
     io.to(roomId).emit("dice_animation", { playerIndex: player.index, d1, d2, isDouble });
@@ -519,30 +571,47 @@ io.on("connection", (socket) => {
   socket.on("travel_move", async ({ roomId, playerIndex, targetPos }) => {
     const room = rooms[roomId];
     if (!room) return;
-
     const user = room.state.users[`user${playerIndex}`];
+    user.isTraveling = true;
     if (!user) return;
 
     const oldPos = user.position;
-    // 이동할 칸 수 계산 (애니메이션용)
     const steps = (targetPos - oldPos + 28) % 28;
 
     console.log(`✈ travel_move 실행: ${oldPos} → ${targetPos} (${steps}칸 이동)`);
 
-    // 1. 서버 메모리상의 위치 업데이트
+    // 1. 서버 메모리상 위치 미리 업데이트 (애니메이션 시작 전)
     user.position = targetPos;
-    user.pendingTravel = { needSelect: false }; // 예약 해제
+    user.pendingTravel = { needSelect: false };
 
-    // 2. 클라이언트들에게 이동 애니메이션 명령 (steps가 0이면 즉시 이동)
+    // 2. 클라이언트에 이동 명령 (애니메이션 실행용)
     io.to(roomId).emit("move_player", {
       playerIndex: playerIndex,
       steps: steps,
       isDouble: false,
-      isTravel: true, // 여행 이동임을 알림
+      isTravel: true,
     });
 
-    // 3. DB 업데이트
-    await updateDBUser(roomId, playerIndex, user);
+    // 3. 애니메이션 시간(steps * 400ms) 후에 칸 이벤트 발생시키기
+    setTimeout(async () => {
+      // 월급 처리 (시작점 통과 여부)
+      if (targetPos < oldPos) {
+        user.money += 1000000;
+        user.totalMoney += 1000000;
+        if (!user.level) user.level = 1;
+        if (user.level < 4) user.level += 1;
+      }
+
+      // DB 업데이트
+      await updateDBUser(roomId, playerIndex, user);
+      io.to(roomId).emit("update_state", room.state);
+
+      // ⭐ 중요: 여기서 바로 턴을 넘기지 말고, 도착한 칸의 이벤트를 트리거합니다.
+      // 기존에 작성하신 move_complete 내부 로직을 별도 함수로 빼거나,
+      // 아래와 같이 이벤트 판별 로직을 호출해야 합니다.
+
+      handleTileEvent(roomId, playerIndex, targetPos, false);
+    }, steps * 400 + 500); // 애니메이션 시간 + 여유시간
   });
 
   socket.on("move_complete", async ({ roomId, playerIndex, finalPos, isDouble }) => {
@@ -550,155 +619,38 @@ io.on("connection", (socket) => {
     if (!room) return;
 
     const user = room.state.users[`user${playerIndex}`];
-
     const oldPos = user.position || 0;
-    user.position = finalPos;
 
-    // ✅ [수정] 이동 후 위치를 여기서 확정
+    // 1. 위치 확정 및 시작점 통과 체크
     user.position = finalPos;
-
-    // ✅ [수정] 시작점 통과 여부 확인 (한바퀴 돌았을 때)
     const passedStart = finalPos < oldPos;
 
+    if (user.isTraveling === true) {
+      user.isTraveling = false; // 플래그 초기화 후 종료
+      return;
+    }
     if (passedStart) {
-      console.log(`💰 Player ${playerIndex} 시작점 통과! 월급 지급 & 레벨업.`);
+      console.log(`💰 Player ${playerIndex} 시작점 통과! 월급 지급.`);
       user.money += 1000000;
       user.totalMoney = (user.totalMoney || 0) + 1000000;
-
       if (!user.level) user.level = 1;
       if (user.level < 4) user.level += 1;
     }
 
-    if (user.position === 7) {
+    // 2. 무인도(7번 칸) 예외 처리
+    if (finalPos === 7) {
       user.islandCount = 3;
-      await db.collection("online").doc(roomId).collection("users").doc(`user${playerIndex}`).update({
-        position: user.position,
-        islandCount: user.islandCount,
-        money: user.money,
-        totalMoney: user.totalMoney,
-        level: user.level,
-      });
+      await updateDBUser(roomId, playerIndex, user);
       io.to(roomId).emit("update_state", room.state);
       return nextTurn(roomId);
     }
 
-    if (user._fromTravel) {
-      user._fromTravel = false;
-      io.to(roomId).emit("update_state", room.state);
-      return nextTurn(roomId);
-    }
-    // DB 업데이트 (이동 및 월급/레벨업 반영)
-    await db
-      .collection("online")
-      .doc(roomId)
-      .collection("users")
-      .doc(`user${playerIndex}`)
-      .update({
-        position: user.position,
-        money: user.money,
-        totalMoney: user.totalMoney,
-        level: user.level,
-        islandCount: user.islandCount,
-      })
-      .catch((e) => console.error("DB 업데이트 오류:", e));
-
+    // 3. DB 업데이트 및 상태 동기화
     await updateDBUser(roomId, playerIndex, user);
     io.to(roomId).emit("update_state", room.state);
 
-    const tile = room.state.board[`b${user.position}`] || { type: "none" };
-
-    if (tile.type === "start") {
-      io.to(roomId).emit("request_action", { type: "start_event", playerIndex });
-    } else if (tile.type === "festival") {
-      io.to(roomId).emit("request_action", { type: "festival_event", pos: user.position, playerIndex });
-    } else if (tile.type === "travel") {
-      console.log(`✈ Player ${playerIndex} 여행지 도착! 예약 설정`);
-
-      // 1. 유저 상태에 여행 예약 플래그 설정
-      user.pendingTravel = { needSelect: true };
-
-      // 2. DB 업데이트 (중요: 업데이트 완료 후 턴을 넘겨야 함)
-      await updateDBUser(roomId, playerIndex, user);
-
-      // 3. 현재 상태를 알리고 턴 종료
-      io.to(roomId).emit("update_state", room.state);
-      return nextTurn(roomId);
-    } else if (tile.type === "chance") {
-      io.to(roomId).emit("request_action", { type: "chance", pos: user.position, playerIndex, isDouble });
-    } else if (tile.type === "tax") {
-      let totalBuildingValue = 0;
-      const levelMultipliers = [0, 1, 3, 7, 15];
-      for (let key in room.state.board) {
-        const boardTile = room.state.board[key];
-        if (boardTile.owner?.toString() === playerIndex.toString()) {
-          const currentLevel = boardTile.level || 0;
-          const basePrice = boardTile.tollPrice || 0;
-          if (currentLevel > 0) totalBuildingValue += basePrice * levelMultipliers[currentLevel];
-        }
-      }
-      const calculatedTax = Math.floor(totalBuildingValue * 0.1);
-      io.to(roomId).emit("request_action", {
-        type: "tax_event",
-        pos: user.position,
-        playerIndex: playerIndex,
-        tax: calculatedTax,
-        isDouble: isDouble,
-      });
-    } else if (tile.type === "land") {
-      const noOwner = !tile.owner || tile.owner === "N" || tile.owner === "0" || tile.owner === 0;
-      const isMyProperty = !noOwner && tile.owner.toString() === playerIndex.toString();
-
-      if (noOwner || isMyProperty) {
-        return io.to(roomId).emit("request_action", {
-          type: "land_event",
-          pos: user.position,
-          playerIndex: playerIndex,
-          isDouble: isDouble,
-        });
-      } else {
-        let levelMulti = [0, 2, 6, 14, 30][tile.level || 0];
-        let toll = tile.tollPrice * (tile.multiply || 1) * levelMulti;
-        io.to(roomId).emit("request_action", {
-          type: "toll_event",
-          pos: user.position,
-          playerIndex: playerIndex,
-          toll,
-          ownerIndex: tile.owner,
-          isDouble: isDouble,
-        });
-      }
-    } else if (tile.type === "tax") {
-      const userKey = `user${playerIndex}`;
-      let totalBuildingValue = 0;
-      const levelMultipliers = [0, 1, 3, 7, 15];
-
-      for (let key in room.state.board) {
-        const boardTile = room.state.board[key];
-        if (boardTile.owner?.toString() === playerIndex.toString()) {
-          const currentLevel = boardTile.level || 0;
-          const basePrice = boardTile.tollPrice || 0;
-          if (currentLevel > 0) {
-            totalBuildingValue += basePrice * levelMultipliers[currentLevel];
-          }
-        }
-      }
-      const calculatedTax = Math.floor(totalBuildingValue * 0.1);
-
-      return io.to(roomId).emit("request_action", {
-        type: "tax_event",
-        pos: user.position,
-        playerIndex: playerIndex,
-        tax: calculatedTax,
-        isDouble: isDouble,
-      });
-    } else {
-      // 이벤트 없는 칸이면 턴 종료 (더블일 경우 턴 유지)
-      if (isDouble) {
-        return io.to(roomId).emit("update_state", room.state);
-      } else {
-        return nextTurn(roomId);
-      }
-    }
+    // 4. ✨ 중복 로직 대신 함수 호출!
+    handleTileEvent(roomId, playerIndex, finalPos, isDouble);
   });
   socket.on("reserve_travel", ({ roomId, playerIndex }) => {
     const room = rooms[roomId];
@@ -824,19 +776,19 @@ io.on("connection", (socket) => {
 
     // 🏆 생존자 확인 (파산 승리)
     let survivors = [];
-    Object.keys(room.state.users).forEach(key => {
-        const u = room.state.users[key];
-        if (u.type !== 'D' && u.type !== 'N') {
-            survivors.push(parseInt(key.replace('user', '')));
-        }
+    Object.keys(room.state.users).forEach((key) => {
+      const u = room.state.users[key];
+      if (u.type !== "D" && u.type !== "N") {
+        survivors.push(parseInt(key.replace("user", "")));
+      }
     });
 
     // 생존자가 1명이면 그 사람이 승리
     if (survivors.length === 1) {
-        const winnerIdx = survivors[0];
-        console.log(`🏆 파산 승리! Player ${winnerIdx}`);
-        io.to(roomId).emit("game_over", { winner: winnerIdx, type: "bankruptcy" });
-        return; // 게임 종료 (턴 안 넘김)
+      const winnerIdx = survivors[0];
+      console.log(`🏆 파산 승리! Player ${winnerIdx}`);
+      io.to(roomId).emit("game_over", { winner: winnerIdx, type: "bankruptcy" });
+      return; // 게임 종료 (턴 안 넘김)
     }
 
     io.to(roomId).emit("update_state", room.state);
@@ -854,5 +806,117 @@ io.on("connection", (socket) => {
     });
   });
 });
+
+async function handleTileEvent(roomId, playerIndex, position, isDouble) {
+  const room = rooms[roomId];
+  if (!room) return;
+  const user = room.state.users[`user${playerIndex}`];
+  const tile = room.state.board[`b${position}`] || { type: "none" };
+
+  console.log(`📍 이벤트 체크: Player ${playerIndex} -> ${tile.type}(${position})`);
+
+  if (position === 7) {
+    console.log(`🏝️ Player ${playerIndex} 무인도 입성 (3턴 대기)`);
+    user.islandCount = 3;
+    await updateDBUser(roomId, playerIndex, user);
+    io.to(roomId).emit("update_state", room.state);
+    return nextTurn(roomId); // 무인도는 즉시 턴 종료
+  }
+  if (tile.type === "start") {
+    // 1. 플레이어가 소유한 땅이 있는지 확인
+    let hasMyLand = false;
+    for (let key in room.state.board) {
+      if (room.state.board[key].owner?.toString() === playerIndex.toString()) {
+        hasMyLand = true;
+        break;
+      }
+    }
+
+    if (hasMyLand) {
+      // 소유한 땅이 있으면 평소처럼 랜드마크 건설 팝업 요청
+      return io.to(roomId).emit("request_action", { type: "start_event", playerIndex });
+    } else {
+      // 소유한 땅이 없으면 하이라이트를 띄우지 않고 그냥 턴 종료 (또는 다음 턴)
+      console.log(`💰 Player ${playerIndex} 출발지 도착 (소유한 땅 없음 - 패스)`);
+      if (isDouble) {
+        return io.to(roomId).emit("enable_roll_dice", { playerIndex });
+      } else {
+        return nextTurn(roomId);
+      }
+    }
+  }
+
+  if (tile.type === "festival") {
+    return io.to(roomId).emit("request_action", { type: "festival_event", pos: position, playerIndex });
+  }
+
+  if (tile.type === "travel") {
+    user.pendingTravel = { needSelect: true };
+    await updateDBUser(roomId, playerIndex, user);
+    io.to(roomId).emit("update_state", room.state);
+    return nextTurn(roomId); // 여행 칸은 바로 턴 종료
+  }
+
+  if (tile.type === "chance") {
+    return io.to(roomId).emit("request_action", { type: "chance", pos: position, playerIndex, isDouble });
+  }
+
+  if (tile.type === "land") {
+    const noOwner = !tile.owner || tile.owner === "N" || tile.owner === "0" || tile.owner === 0;
+    const isMyProperty = !noOwner && tile.owner.toString() === playerIndex.toString();
+
+    if (noOwner || (isMyProperty && tile.level < 4)) {
+      // 💡 [수정] 내 땅이라도 이미 풀빌딩(level 4)이면 팝업을 띄우지 않음
+      return io.to(roomId).emit("request_action", {
+        type: "land_event",
+        pos: position,
+        playerIndex: playerIndex,
+        isDouble: isDouble,
+        canBuild: noOwner || (isMyProperty && tile.level < 4),
+      });
+    } else if (!noOwner && !isMyProperty) {
+      // 남의 땅 통행료
+      let levelMulti = [0, 2, 6, 14, 30][tile.level || 0];
+      let toll = tile.tollPrice * (tile.multiply || 1) * levelMulti;
+      return io.to(roomId).emit("request_action", {
+        type: "toll_event",
+        pos: position,
+        playerIndex: playerIndex,
+        toll,
+        ownerIndex: tile.owner,
+        isDouble: isDouble,
+      });
+    }
+  }
+
+  if (tile.type === "tax") {
+    let totalBuildingValue = 0;
+    const levelMultipliers = [0, 1, 3, 7, 15];
+    for (let key in room.state.board) {
+      const boardTile = room.state.board[key];
+      if (boardTile.owner?.toString() === playerIndex.toString()) {
+        const currentLevel = boardTile.level || 0;
+        const basePrice = boardTile.tollPrice || 0;
+        if (currentLevel > 0) totalBuildingValue += basePrice * levelMultipliers[currentLevel];
+      }
+    }
+    const calculatedTax = Math.floor(totalBuildingValue * 0.1);
+    return io.to(roomId).emit("request_action", {
+      type: "tax_event",
+      pos: position,
+      playerIndex: playerIndex,
+      tax: calculatedTax,
+      isDouble: isDouble,
+    });
+  }
+
+  // 위 이벤트에 해당하지 않는 경우에만 턴 종료 처리
+  if (isDouble) {
+    io.to(roomId).emit("update_state", room.state);
+    io.to(roomId).emit("enable_roll_dice", { playerIndex });
+  } else {
+    nextTurn(roomId);
+  }
+}
 
 server.listen(3000, () => console.log("🚀 온라인 게임 서버 가동 중 (Port 3000)"));
