@@ -210,8 +210,6 @@ function nextTurn(roomId) {
     }
   }
 
-  let nextPlayerIndex = activeIndexes[nextIndexInList];
-
   // 파산한 플레이어 건너뛰기
   let safety = 0;
   while (safety < activeIndexes.length) {
@@ -920,3 +918,4 @@ async function handleTileEvent(roomId, playerIndex, position, isDouble) {
 }
 
 server.listen(3000, () => console.log("🚀 온라인 게임 서버 가동 중 (Port 3000)"));
+
