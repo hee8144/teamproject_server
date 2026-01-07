@@ -181,12 +181,38 @@ function nextTurn(roomId) {
   let nextIndexInList = (currentIndexInList + 1) % activeIndexes.length;
   let nextPlayerIndex = activeIndexes[nextIndexInList];
 
-  // 1. 초기 한 바퀴 체크 (정상적인 턴 전환 시)
+  // 한 바퀴 돌았을 때 턴 감소
   if (nextIndexInList === 0) {
-    if (!reduceTotalTurn(roomId)) return; // 턴 종료 시 함수 종료
+    if (room.state.totalTurn > 0) {
+      room.state.totalTurn -= 1;
+      console.log(`📉 턴 종료! 남은 턴: ${room.state.totalTurn}`);
+    }
+
+    // 🏆 [추가됨] 턴이 0이 되면 게임 종료 (자산 1등 승리)
+    if (room.state.totalTurn <= 0) {
+        let maxMoney = -999999999;
+        let winnerIdx = 0;
+
+        // 생존자 중 자산(Total Money)이 가장 많은 사람 찾기
+        for (let i = 1; i <= 4; i++) {
+            const u = room.state.users[`user${i}`];
+            if (u && u.type !== 'D' && u.type !== 'N') {
+                if (u.totalMoney > maxMoney) {
+                    maxMoney = u.totalMoney;
+                    winnerIdx = i;
+                }
+            }
+        }
+
+        console.log(`🏁 턴 종료! 승자: Player ${winnerIdx} (자산: ${maxMoney})`);
+        io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
+        return; // 게임 종료
+    }
   }
 
-  // 🚀 [수정 구간] 파산자 및 휴식자 건너뛰기 통합 루프
+  let nextPlayerIndex = activeIndexes[nextIndexInList];
+
+  // 파산한 플레이어 건너뛰기
   let safety = 0;
   while (safety < activeIndexes.length) {
     const targetUser = room.state.users[`user${nextPlayerIndex}`];
@@ -214,12 +240,23 @@ function nextTurn(roomId) {
 
     // 다음 인덱스로 이동
     nextIndexInList = (nextIndexInList + 1) % activeIndexes.length;
-
-    // 건너뛰는 도중 0번을 지나가면 턴 감소 로직 다시 실행
-    if (nextIndexInList === 0) {
-      if (!reduceTotalTurn(roomId)) return;
+    // 건너뛰는 과정에서 0번 인덱스를 지나가면 턴 감소 로직 적용
+    if (nextIndexInList === 0 && room.state.totalTurn > 0) {
+       room.state.totalTurn -= 1;
+       // 여기서도 턴 0 체크
+       if (room.state.totalTurn <= 0) {
+            let maxMoney = -999999999;
+            let winnerIdx = 0;
+            for (let i = 1; i <= 4; i++) {
+                const u = room.state.users[`user${i}`];
+                if (u && u.type !== 'D' && u.type !== 'N') {
+                    if (u.totalMoney > maxMoney) { maxMoney = u.totalMoney; winnerIdx = i; }
+                }
+            }
+            io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
+            return;
+       }
     }
-
     nextPlayerIndex = activeIndexes[nextIndexInList];
     safety++;
   }
