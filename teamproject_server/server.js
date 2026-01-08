@@ -127,7 +127,7 @@ async function updateDBUser(roomId, idx, userData) {
 function checkWinCondition(board, playerIndex) {
   const playerStr = String(playerIndex);
 
-  // A. 트리플 독점 (Triple Monopoly)
+  // A. 트리플 독점
   let ownedGroups = 0;
   for (let g = 1; g <= 8; g++) {
     let groupTiles = [];
@@ -143,7 +143,7 @@ function checkWinCondition(board, playerIndex) {
   }
   if (ownedGroups >= 3) return "triple_monopoly";
 
-  // B. 라인 독점 (Line Monopoly)
+  // B. 라인 독점
   const lines = [
     { start: 0, end: 7 },
     { start: 7, end: 14 },
@@ -168,7 +168,69 @@ function checkWinCondition(board, playerIndex) {
   return null;
 }
 
-// --- 턴 관리 로직 (턴 종료 승리 추가됨) ---
+// ⚠️ [추가됨] 독점 경고 체크 함수 (승리 직전 상태인지 확인)
+function checkWarningCondition(board, playerIndex) {
+  const playerStr = String(playerIndex);
+
+  // 1. 라인 독점 경고 체크 (해당 라인의 땅을 1개 빼고 다 먹었을 때)
+  const lines = [
+    { start: 0, end: 7 },
+    { start: 7, end: 14 },
+    { start: 14, end: 21 },
+    { start: 21, end: 28 },
+  ];
+
+  for (let line of lines) {
+    let ownedCount = 0;
+    let totalLandCount = 0;
+
+    for (let i = line.start; i < line.end; i++) {
+      const tile = board[`b${i}`];
+      if (tile && tile.type === "land") {
+        totalLandCount++;
+        if (String(tile.owner) === playerStr) {
+          ownedCount++;
+        }
+      }
+    }
+
+    // 땅이 존재하는 라인이고, 딱 1개 남았을 때
+    if (totalLandCount > 0 && ownedCount === totalLandCount - 1) {
+      return "line"; // 라인 독점 경고 리턴
+    }
+  }
+
+  // 2. 트리플 독점 경고 체크 (2개 그룹 독점 + 나머지 1개 그룹이 1개 남았을 때)
+  let fullGroups = 0;
+  let almostGroups = 0;
+
+  for (let g = 1; g <= 8; g++) {
+    let groupTiles = [];
+    for (let key in board) {
+      if (board[key].type === "land" && board[key].group === g) {
+        groupTiles.push(board[key]);
+      }
+    }
+
+    if (groupTiles.length > 0) {
+      const owned = groupTiles.filter(t => String(t.owner) === playerStr).length;
+      if (owned === groupTiles.length) {
+        fullGroups++;
+      } else if (owned === groupTiles.length - 1) {
+        almostGroups++;
+      }
+    }
+  }
+
+  // 트리플 독점 조건(3그룹)에 1개 부족한 상황
+  if (fullGroups >= 2 && almostGroups >= 1) {
+    return "triple"; // 트리플 독점 경고 리턴
+  }
+
+  return null; // 경고 없음
+}
+
+// --- 턴 관리 로직 ---
 
 function nextTurn(roomId) {
   const room = rooms[roomId];
@@ -188,25 +250,22 @@ function nextTurn(roomId) {
       console.log(`📉 턴 종료! 남은 턴: ${room.state.totalTurn}`);
     }
 
-    // 🏆 [추가됨] 턴이 0이 되면 게임 종료 (자산 1등 승리)
+    // 턴 0되면 게임 종료
     if (room.state.totalTurn <= 0) {
-      let maxMoney = -999999999;
-      let winnerIdx = 0;
-
-      // 생존자 중 자산(Total Money)이 가장 많은 사람 찾기
-      for (let i = 1; i <= 4; i++) {
-        const u = room.state.users[`user${i}`];
-        if (u && u.type !== "D" && u.type !== "N") {
-          if (u.totalMoney > maxMoney) {
-            maxMoney = u.totalMoney;
-            winnerIdx = i;
-          }
+        let maxMoney = -999999999;
+        let winnerIdx = 0;
+        for (let i = 1; i <= 4; i++) {
+            const u = room.state.users[`user${i}`];
+            if (u && u.type !== 'D' && u.type !== 'N') {
+                if (u.totalMoney > maxMoney) {
+                    maxMoney = u.totalMoney;
+                    winnerIdx = i;
+                }
+            }
         }
-      }
-
-      console.log(`🏁 턴 종료! 승자: Player ${winnerIdx} (자산: ${maxMoney})`);
-      io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
-      return; // 게임 종료
+        console.log(`🏁 턴 종료! 승자: Player ${winnerIdx} (자산: ${maxMoney})`);
+        io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
+        return;
     }
   }
 
@@ -238,19 +297,16 @@ function nextTurn(roomId) {
 
     // 다음 인덱스로 이동
     nextIndexInList = (nextIndexInList + 1) % activeIndexes.length;
-    // 건너뛰는 과정에서 0번 인덱스를 지나가면 턴 감소 로직 적용
     if (nextIndexInList === 0 && room.state.totalTurn > 0) {
-      room.state.totalTurn -= 1;
-      // 여기서도 턴 0 체크
-      if (room.state.totalTurn <= 0) {
-        let maxMoney = -999999999;
-        let winnerIdx = 0;
-        for (let i = 1; i <= 4; i++) {
-          const u = room.state.users[`user${i}`];
-          if (u && u.type !== "D" && u.type !== "N") {
-            if (u.totalMoney > maxMoney) {
-              maxMoney = u.totalMoney;
-              winnerIdx = i;
+       room.state.totalTurn -= 1;
+       if (room.state.totalTurn <= 0) {
+            let maxMoney = -999999999;
+            let winnerIdx = 0;
+            for (let i = 1; i <= 4; i++) {
+                const u = room.state.users[`user${i}`];
+                if (u && u.type !== 'D' && u.type !== 'N') {
+                    if (u.totalMoney > maxMoney) { maxMoney = u.totalMoney; winnerIdx = i; }
+                }
             }
           }
         }
@@ -485,9 +541,19 @@ io.on("connection", (socket) => {
         console.error("❌ 데이터 로드 오류:", e);
       }
     } else {
-      // 2. ⭐ 중요: 이미 rooms[roomId]가 존재한다면 DB에서 다시 읽지 않습니다.
-      // 기존의 db.collection("online").doc(roomId).get() 로직을 "삭제" 하세요.
-      console.log(`[Join] ${roomId} 방은 이미 메모리에 있어 DB 로드를 생략합니다.`);
+      try {
+        const roomRef = db.collection("online").doc(roomId);
+        const roomSnap = await roomRef.get();
+        if (roomSnap.exists) {
+          const dbData = roomSnap.data();
+          if (dbData.board) {
+            rooms[roomId].state.board = dbData.board;
+            console.log(`✅ [Sync] Room ${roomId} Board data synchronized with DB (Names Loaded)`);
+          }
+        }
+      } catch (e) {
+        console.error("Board sync error:", e);
+      }
     }
 
     const room = rooms[roomId];
@@ -546,13 +612,12 @@ io.on("connection", (socket) => {
 
       if (user.islandCount > 0) {
         if (isDouble) {
-          user.islandCount = 0; // 더블이면 즉시 탈출
+          user.islandCount = 0;
           console.log(`🎲 Player ${player.index} 더블로 무인도 탈출!`);
         } else {
           user.islandCount -= 1;
           console.log(`🏝️ Player ${player.index} 무인도 대기. 남은 턴: ${user.islandCount}`);
 
-          // 이동하지 않고 상태만 업데이트 후 턴 종료
           await db.collection("online").doc(roomId).collection("users").doc(`user${player.index}`).update({
             islandCount: user.islandCount,
           });
@@ -660,14 +725,12 @@ io.on("connection", (socket) => {
     const user = room.state.users[`user${playerIndex}`];
     if (!user) return;
 
-    // ⭐ 여행 예약만
     user.pendingTravel = { needSelect: true };
 
     console.log(`✈ Player ${playerIndex} 국내여행 예약 → 턴 종료`);
 
     io.to(roomId).emit("update_state", room.state);
 
-    // ✅ 여기서 반드시 턴 종료
     nextTurn(roomId);
   });
 
@@ -732,6 +795,14 @@ io.on("connection", (socket) => {
         return;
       }
 
+      // 4. ✅ [추가됨] 경고 조건 체크 (승리가 아닐 때만 확인)
+      const warningType = checkWarningCondition(room.state.board, currentPlayerIndex);
+      if (warningType) {
+        console.log(`⚠️ 독점 경고 발생! Player ${currentPlayerIndex} - ${warningType}`);
+        // 모든 클라이언트에게 경고 팝업을 띄우라고 신호 보냄
+        io.to(roomId).emit("warning_message", { players: [currentPlayerIndex], type: warningType });
+      }
+
       if (isIslandEscape || isDouble) {
         io.to(roomId).emit("update_state", room.state);
       } else {
@@ -750,7 +821,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // 🏆 [추가됨] 파산 시 승리 조건 체크
   socket.on("player_bankrupt", async ({ roomId, playerIndex }) => {
     const room = rooms[roomId];
     if (!room) return;
@@ -775,7 +845,7 @@ io.on("connection", (socket) => {
     }
     if (Object.keys(bUpdates).length > 0) await roomRef.update(bUpdates);
 
-    // 🏆 생존자 확인 (파산 승리)
+    // 생존자 확인 (파산 승리)
     let survivors = [];
     Object.keys(room.state.users).forEach((key) => {
       const u = room.state.users[key];
@@ -784,7 +854,6 @@ io.on("connection", (socket) => {
       }
     });
 
-    // 생존자가 1명이면 그 사람이 승리
     if (survivors.length === 1) {
       const winnerIdx = survivors[0];
       console.log(`🏆 파산 승리! Player ${winnerIdx}`);
@@ -921,3 +990,4 @@ async function handleTileEvent(roomId, playerIndex, position, isDouble) {
 }
 
 server.listen(3000, () => console.log("🚀 온라인 게임 서버 가동 중 (Port 3000)"));
+
