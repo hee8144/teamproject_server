@@ -213,7 +213,7 @@ function checkWarningCondition(board, playerIndex) {
     }
 
     if (groupTiles.length > 0) {
-      const owned = groupTiles.filter(t => String(t.owner) === playerStr).length;
+      const owned = groupTiles.filter((t) => String(t.owner) === playerStr).length;
       if (owned === groupTiles.length) {
         fullGroups++;
       } else if (owned === groupTiles.length - 1) {
@@ -252,20 +252,20 @@ function nextTurn(roomId) {
 
     // 턴 0되면 게임 종료
     if (room.state.totalTurn <= 0) {
-        let maxMoney = -999999999;
-        let winnerIdx = 0;
-        for (let i = 1; i <= 4; i++) {
-            const u = room.state.users[`user${i}`];
-            if (u && u.type !== 'D' && u.type !== 'N') {
-                if (u.totalMoney > maxMoney) {
-                    maxMoney = u.totalMoney;
-                    winnerIdx = i;
-                }
-            }
+      let maxMoney = -999999999;
+      let winnerIdx = 0;
+      for (let i = 1; i <= 4; i++) {
+        const u = room.state.users[`user${i}`];
+        if (u && u.type !== "D" && u.type !== "N") {
+          if (u.totalMoney > maxMoney) {
+            maxMoney = u.totalMoney;
+            winnerIdx = i;
+          }
         }
-        console.log(`🏁 턴 종료! 승자: Player ${winnerIdx} (자산: ${maxMoney})`);
-        io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
-        return;
+      }
+      console.log(`🏁 턴 종료! 승자: Player ${winnerIdx} (자산: ${maxMoney})`);
+      io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
+      return;
     }
   }
 
@@ -298,25 +298,26 @@ function nextTurn(roomId) {
     // 다음 인덱스로 이동
     nextIndexInList = (nextIndexInList + 1) % activeIndexes.length;
     if (nextIndexInList === 0 && room.state.totalTurn > 0) {
-       room.state.totalTurn -= 1;
-       if (room.state.totalTurn <= 0) {
-            let maxMoney = -999999999;
-            let winnerIdx = 0;
-            for (let i = 1; i <= 4; i++) {
-                const u = room.state.users[`user${i}`];
-                if (u && u.type !== 'D' && u.type !== 'N') {
-                    if (u.totalMoney > maxMoney) { maxMoney = u.totalMoney; winnerIdx = i; }
-                }
+      room.state.totalTurn -= 1;
+      if (room.state.totalTurn <= 0) {
+        let maxMoney = -999999999;
+        let winnerIdx = 0;
+        for (let i = 1; i <= 4; i++) {
+          const u = room.state.users[`user${i}`];
+          if (u && u.type !== "D" && u.type !== "N") {
+            if (u.totalMoney > maxMoney) {
+              maxMoney = u.totalMoney;
+              winnerIdx = i;
             }
           }
         }
-        io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
-        return;
       }
     }
-    nextPlayerIndex = activeIndexes[nextIndexInList];
-    safety++;
+    io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
+    return;
   }
+  nextPlayerIndex = activeIndexes[nextIndexInList];
+  safety++;
 
   room.state.currentTurn = nextPlayerIndex;
   const nextPlayer = room.state.users[`user${nextPlayerIndex}`];
@@ -990,4 +991,3 @@ async function handleTileEvent(roomId, playerIndex, position, isDouble) {
 }
 
 server.listen(3000, () => console.log("🚀 온라인 게임 서버 가동 중 (Port 3000)"));
-
