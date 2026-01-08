@@ -477,7 +477,7 @@ io.on("connection", (socket) => {
             },
             board: initialBoard,
             currentTurn: 1,
-            totalTurn: 3,
+            totalTurn: 20,
             localName: localData?.localName || "",
           },
           players: [],
