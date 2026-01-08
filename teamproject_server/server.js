@@ -190,27 +190,25 @@ function nextTurn(roomId) {
 
     // 🏆 [추가됨] 턴이 0이 되면 게임 종료 (자산 1등 승리)
     if (room.state.totalTurn <= 0) {
-        let maxMoney = -999999999;
-        let winnerIdx = 0;
+      let maxMoney = -999999999;
+      let winnerIdx = 0;
 
-        // 생존자 중 자산(Total Money)이 가장 많은 사람 찾기
-        for (let i = 1; i <= 4; i++) {
-            const u = room.state.users[`user${i}`];
-            if (u && u.type !== 'D' && u.type !== 'N') {
-                if (u.totalMoney > maxMoney) {
-                    maxMoney = u.totalMoney;
-                    winnerIdx = i;
-                }
-            }
+      // 생존자 중 자산(Total Money)이 가장 많은 사람 찾기
+      for (let i = 1; i <= 4; i++) {
+        const u = room.state.users[`user${i}`];
+        if (u && u.type !== "D" && u.type !== "N") {
+          if (u.totalMoney > maxMoney) {
+            maxMoney = u.totalMoney;
+            winnerIdx = i;
+          }
         }
+      }
 
-        console.log(`🏁 턴 종료! 승자: Player ${winnerIdx} (자산: ${maxMoney})`);
-        io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
-        return; // 게임 종료
+      console.log(`🏁 턴 종료! 승자: Player ${winnerIdx} (자산: ${maxMoney})`);
+      io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
+      return; // 게임 종료
     }
   }
-
-  let nextPlayerIndex = activeIndexes[nextIndexInList];
 
   // 파산한 플레이어 건너뛰기
   let safety = 0;
@@ -242,20 +240,23 @@ function nextTurn(roomId) {
     nextIndexInList = (nextIndexInList + 1) % activeIndexes.length;
     // 건너뛰는 과정에서 0번 인덱스를 지나가면 턴 감소 로직 적용
     if (nextIndexInList === 0 && room.state.totalTurn > 0) {
-       room.state.totalTurn -= 1;
-       // 여기서도 턴 0 체크
-       if (room.state.totalTurn <= 0) {
-            let maxMoney = -999999999;
-            let winnerIdx = 0;
-            for (let i = 1; i <= 4; i++) {
-                const u = room.state.users[`user${i}`];
-                if (u && u.type !== 'D' && u.type !== 'N') {
-                    if (u.totalMoney > maxMoney) { maxMoney = u.totalMoney; winnerIdx = i; }
-                }
+      room.state.totalTurn -= 1;
+      // 여기서도 턴 0 체크
+      if (room.state.totalTurn <= 0) {
+        let maxMoney = -999999999;
+        let winnerIdx = 0;
+        for (let i = 1; i <= 4; i++) {
+          const u = room.state.users[`user${i}`];
+          if (u && u.type !== "D" && u.type !== "N") {
+            if (u.totalMoney > maxMoney) {
+              maxMoney = u.totalMoney;
+              winnerIdx = i;
             }
-            io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
-            return;
-       }
+          }
+        }
+        io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
+        return;
+      }
     }
     nextPlayerIndex = activeIndexes[nextIndexInList];
     safety++;
@@ -534,7 +535,7 @@ io.on("connection", (socket) => {
 
     const d1 = Math.floor(Math.random() * 6) + 1;
     const d2 = Math.floor(Math.random() * 6) + 1;
-    const steps = 3;
+    const steps = d1 + d2;
     const isDouble = d1 === d2;
 
     io.to(roomId).emit("dice_animation", { playerIndex: player.index, d1, d2, isDouble });
@@ -611,7 +612,7 @@ io.on("connection", (socket) => {
       // 아래와 같이 이벤트 판별 로직을 호출해야 합니다.
 
       handleTileEvent(roomId, playerIndex, targetPos, false);
-    }, steps * 400 + 500); // 애니메이션 시간 + 여유시간
+    }, steps * 400); // 애니메이션 시간 + 여유시간
   });
 
   socket.on("move_complete", async ({ roomId, playerIndex, finalPos, isDouble }) => {
