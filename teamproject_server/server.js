@@ -474,7 +474,7 @@ io.on("connection", (socket) => {
             },
             board: initialBoard,
             currentTurn: 1,
-            totalTurn: 20,
+            totalTurn: 3,
             localName: localData?.localName || "",
           },
           players: [],
@@ -599,7 +599,7 @@ io.on("connection", (socket) => {
 
     const d1 = Math.floor(Math.random() * 6) + 1;
     const d2 = Math.floor(Math.random() * 6) + 1;
-    const steps = d1 + d2;
+    const steps = 3;
     const isDouble = d1 === d2;
 
     io.to(roomId).emit("dice_animation", { playerIndex: player.index, d1, d2, isDouble });
@@ -988,4 +988,3 @@ async function handleTileEvent(roomId, playerIndex, position, isDouble) {
 }
 
 server.listen(3000, () => console.log("🚀 온라인 게임 서버 가동 중 (Port 3000)"));
-
