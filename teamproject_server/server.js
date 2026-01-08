@@ -308,9 +308,11 @@ function nextTurn(roomId) {
                     if (u.totalMoney > maxMoney) { maxMoney = u.totalMoney; winnerIdx = i; }
                 }
             }
-            io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
-            return;
-       }
+          }
+        }
+        io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
+        return;
+      }
     }
     nextPlayerIndex = activeIndexes[nextIndexInList];
     safety++;
@@ -675,7 +677,7 @@ io.on("connection", (socket) => {
       // 아래와 같이 이벤트 판별 로직을 호출해야 합니다.
 
       handleTileEvent(roomId, playerIndex, targetPos, false);
-    }, steps * 400 + 500); // 애니메이션 시간 + 여유시간
+    }, steps * 400); // 애니메이션 시간 + 여유시간
   });
 
   socket.on("move_complete", async ({ roomId, playerIndex, finalPos, isDouble }) => {
