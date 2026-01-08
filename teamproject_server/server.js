@@ -56,7 +56,7 @@ function generateInitialBoard() {
       name = "찬스";
     }
 
-    // 2. 기본 데이터 구조
+    // 2. 기본 데이터 구조 (여기서 owner: "N"을 강제함)
     const blockData = {
       index: i,
       type: type,
@@ -69,7 +69,7 @@ function generateInitialBoard() {
       group: 0,
     };
 
-    // 3. 땅일 경우 세부 설정
+    // 3. 땅일 경우 세부 설정 (fullName 등 외부 데이터 오염 차단)
     if (type === "land") {
       blockData.tollPrice = 100000 + landCount * 10000;
 
@@ -274,22 +274,28 @@ function nextTurn(roomId) {
   while (safety < activeIndexes.length) {
     const targetUser = room.state.users[`user${nextPlayerIndex}`];
 
+    // Case A: 파산한 플레이어인가?
     if (targetUser?.type === "D") {
       console.log(`💀 Player ${nextPlayerIndex} 파산 - 건너뜁니다.`);
     }
+    // Case B: 한 턴 쉬어야 하는 플레이어인가?
     else if (targetUser?.restCount > 0) {
-      targetUser.restCount -= 1;
+      targetUser.restCount -= 1; // 횟수 차감
       console.log(`😴 Player ${nextPlayerIndex} 휴식 중 - 건너뜁니다. (남은 휴식: ${targetUser.restCount})`);
+
+      // DB 업데이트 (비동기지만 기다리지 않고 진행해도 무방)
       db.collection("online")
         .doc(roomId)
         .collection("users")
         .doc(`user${nextPlayerIndex}`)
         .update({ restCount: targetUser.restCount });
     }
+    // Case C: 정상적인 플레이어인가? -> 이 사람 턴으로 확정!
     else {
       break;
     }
 
+    // 다음 인덱스로 이동
     nextIndexInList = (nextIndexInList + 1) % activeIndexes.length;
     if (nextIndexInList === 0 && room.state.totalTurn > 0) {
        room.state.totalTurn -= 1;
@@ -316,6 +322,7 @@ function nextTurn(roomId) {
   console.log(`🎲 [턴 교체] Player ${nextPlayerIndex} 차례`);
   io.to(roomId).emit("update_state", room.state);
 
+  // 이후 무인도/여행/주사위 활성화 로직 (기존과 동일)
   if (nextPlayer?.islandCount > 0) {
     io.to(roomId).emit("request_action", {
       type: "island_event",
@@ -335,7 +342,7 @@ function nextTurn(roomId) {
   io.to(roomId).emit("enable_roll_dice", { playerIndex: nextPlayerIndex });
 }
 
-// 헬퍼 함수
+// 헬퍼 함수: 턴을 감소시키고 0이 되면 게임을 종료함
 function reduceTotalTurn(roomId) {
   const room = rooms[roomId];
   if (room.state.totalTurn > 0) {
@@ -355,9 +362,9 @@ function reduceTotalTurn(roomId) {
       }
     }
     io.to(roomId).emit("game_over", { winner: winnerIdx, type: "turn_limit" });
-    return false;
+    return false; // 게임 종료됨
   }
-  return true;
+  return true; // 계속 진행
 }
 
 // --- 소켓 이벤트 핸들링 ---
@@ -487,9 +494,12 @@ io.on("connection", (socket) => {
 
   socket.on("join_room", (roomId) => {
     roomId = String(roomId);
+    // 서버 메모리에 방이 이미 있다면 즉시 성공
     if (rooms[roomId]) {
       socket.emit("join_success", roomId);
     } else {
+      // 서버 메모리에 없는데 DB에만 있는 경우,
+      // 오래된 방일 수 있으므로 체크 후 입장 허용
       db.collection("online")
         .doc(roomId)
         .get()
@@ -507,6 +517,7 @@ io.on("connection", (socket) => {
     roomId = String(roomId);
 
     if (!rooms[roomId]) {
+      // 1. 방이 서버 메모리에 없을 때만 DB에서 가져옴
       try {
         const roomRef = db.collection("online").doc(roomId);
         const roomSnap = await roomRef.get();
@@ -588,7 +599,7 @@ io.on("connection", (socket) => {
 
     const d1 = Math.floor(Math.random() * 6) + 1;
     const d2 = Math.floor(Math.random() * 6) + 1;
-    const steps = 1;
+    const steps = d1 + d2;
     const isDouble = d1 === d2;
 
     io.to(roomId).emit("dice_animation", { playerIndex: player.index, d1, d2, isDouble });
@@ -633,9 +644,11 @@ io.on("connection", (socket) => {
 
     console.log(`✈ travel_move 실행: ${oldPos} → ${targetPos} (${steps}칸 이동)`);
 
+    // 1. 서버 메모리상 위치 미리 업데이트 (애니메이션 시작 전)
     user.position = targetPos;
     user.pendingTravel = { needSelect: false };
 
+    // 2. 클라이언트에 이동 명령 (애니메이션 실행용)
     io.to(roomId).emit("move_player", {
       playerIndex: playerIndex,
       steps: steps,
@@ -643,7 +656,9 @@ io.on("connection", (socket) => {
       isTravel: true,
     });
 
+    // 3. 애니메이션 시간(steps * 400ms) 후에 칸 이벤트 발생시키기
     setTimeout(async () => {
+      // 월급 처리 (시작점 통과 여부)
       if (targetPos < oldPos) {
         user.money += 1000000;
         user.totalMoney += 1000000;
@@ -651,11 +666,16 @@ io.on("connection", (socket) => {
         if (user.level < 4) user.level += 1;
       }
 
+      // DB 업데이트
       await updateDBUser(roomId, playerIndex, user);
       io.to(roomId).emit("update_state", room.state);
 
+      // ⭐ 중요: 여기서 바로 턴을 넘기지 말고, 도착한 칸의 이벤트를 트리거합니다.
+      // 기존에 작성하신 move_complete 내부 로직을 별도 함수로 빼거나,
+      // 아래와 같이 이벤트 판별 로직을 호출해야 합니다.
+
       handleTileEvent(roomId, playerIndex, targetPos, false);
-    }, steps * 400 + 500);
+    }, steps * 400 + 500); // 애니메이션 시간 + 여유시간
   });
 
   socket.on("move_complete", async ({ roomId, playerIndex, finalPos, isDouble }) => {
@@ -665,11 +685,12 @@ io.on("connection", (socket) => {
     const user = room.state.users[`user${playerIndex}`];
     const oldPos = user.position || 0;
 
+    // 1. 위치 확정 및 시작점 통과 체크
     user.position = finalPos;
     const passedStart = finalPos < oldPos;
 
     if (user.isTraveling === true) {
-      user.isTraveling = false;
+      user.isTraveling = false; // 플래그 초기화 후 종료
       return;
     }
     if (passedStart) {
@@ -680,6 +701,7 @@ io.on("connection", (socket) => {
       if (user.level < 4) user.level += 1;
     }
 
+    // 2. 무인도(7번 칸) 예외 처리
     if (finalPos === 7) {
       user.islandCount = 3;
       await updateDBUser(roomId, playerIndex, user);
@@ -687,9 +709,11 @@ io.on("connection", (socket) => {
       return nextTurn(roomId);
     }
 
+    // 3. DB 업데이트 및 상태 동기화
     await updateDBUser(roomId, playerIndex, user);
     io.to(roomId).emit("update_state", room.state);
 
+    // 4. ✨ 중복 로직 대신 함수 호출!
     handleTileEvent(roomId, playerIndex, finalPos, isDouble);
   });
   socket.on("reserve_travel", ({ roomId, playerIndex }) => {
@@ -832,7 +856,7 @@ io.on("connection", (socket) => {
       const winnerIdx = survivors[0];
       console.log(`🏆 파산 승리! Player ${winnerIdx}`);
       io.to(roomId).emit("game_over", { winner: winnerIdx, type: "bankruptcy" });
-      return;
+      return; // 게임 종료 (턴 안 넘김)
     }
 
     io.to(roomId).emit("update_state", room.state);
@@ -867,6 +891,7 @@ async function handleTileEvent(roomId, playerIndex, position, isDouble) {
     return nextTurn(roomId); // 무인도는 즉시 턴 종료
   }
   if (tile.type === "start") {
+    // 1. 플레이어가 소유한 땅이 있는지 확인
     let hasMyLand = false;
     for (let key in room.state.board) {
       if (room.state.board[key].owner?.toString() === playerIndex.toString()) {
@@ -876,8 +901,10 @@ async function handleTileEvent(roomId, playerIndex, position, isDouble) {
     }
 
     if (hasMyLand) {
+      // 소유한 땅이 있으면 평소처럼 랜드마크 건설 팝업 요청
       return io.to(roomId).emit("request_action", { type: "start_event", playerIndex });
     } else {
+      // 소유한 땅이 없으면 하이라이트를 띄우지 않고 그냥 턴 종료 (또는 다음 턴)
       console.log(`💰 Player ${playerIndex} 출발지 도착 (소유한 땅 없음 - 패스)`);
       if (isDouble) {
         return io.to(roomId).emit("enable_roll_dice", { playerIndex });
@@ -907,6 +934,7 @@ async function handleTileEvent(roomId, playerIndex, position, isDouble) {
     const isMyProperty = !noOwner && tile.owner.toString() === playerIndex.toString();
 
     if (noOwner || (isMyProperty && tile.level < 4)) {
+      // 💡 [수정] 내 땅이라도 이미 풀빌딩(level 4)이면 팝업을 띄우지 않음
       return io.to(roomId).emit("request_action", {
         type: "land_event",
         pos: position,
@@ -915,6 +943,7 @@ async function handleTileEvent(roomId, playerIndex, position, isDouble) {
         canBuild: noOwner || (isMyProperty && tile.level < 4),
       });
     } else if (!noOwner && !isMyProperty) {
+      // 남의 땅 통행료
       let levelMulti = [0, 2, 6, 14, 30][tile.level || 0];
       let toll = tile.tollPrice * (tile.multiply || 1) * levelMulti;
       return io.to(roomId).emit("request_action", {
@@ -949,6 +978,7 @@ async function handleTileEvent(roomId, playerIndex, position, isDouble) {
     });
   }
 
+  // 위 이벤트에 해당하지 않는 경우에만 턴 종료 처리
   if (isDouble) {
     io.to(roomId).emit("update_state", room.state);
     io.to(roomId).emit("enable_roll_dice", { playerIndex });
@@ -958,3 +988,4 @@ async function handleTileEvent(roomId, playerIndex, position, isDouble) {
 }
 
 server.listen(3000, () => console.log("🚀 온라인 게임 서버 가동 중 (Port 3000)"));
+
