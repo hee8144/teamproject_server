@@ -726,6 +726,7 @@ io.on("connection", (socket) => {
     const user = room.state.users[`user${playerIndex}`];
     if (!user) return;
 
+    user.position = 21;
     user.pendingTravel = { needSelect: true };
 
     console.log(`✈ Player ${playerIndex} 국내여행 예약 → 턴 종료`);
@@ -991,3 +992,4 @@ async function handleTileEvent(roomId, playerIndex, position, isDouble) {
 }
 
 server.listen(3000, () => console.log("🚀 온라인 게임 서버 가동 중 (Port 3000)"));
+
